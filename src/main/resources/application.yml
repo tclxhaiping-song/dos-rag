@@ -1,0 +1,40 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: doc-qa-api
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 55MB
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      embedding:
+        options:
+          model: nomic-embed-text
+      chat:
+        options:
+          model: llama3.2
+    vectorstore:
+      milvus:
+        initialize-schema: true
+        collection-name: doc_qa_chunks
+        embedding-dimension: 768
+        metric-type: COSINE
+        index-type: IVF_FLAT
+        index-parameters: '{"nlist":1024}'
+        client:
+          host: localhost
+          port: 19530
+          username: root
+          password: milvus
+
+# 分块：CHAR = 固定字符窗口+重叠；SENTENCE = 按句号类标点切句再合并到上限长度
+app:
+  chunk:
+    strategy: CHAR
+    char-chunk-size: 800
+    char-overlap: 120
+    sentence-max-chars: 900
