@@ -47,12 +47,13 @@ public class DocumentIngestionService {
         String docId = UUID.randomUUID().toString();
         List<Document> docs = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
-            String chunkId = docId + "#" + i;
+            // 每个 chunk 用独立 UUID 作为 id，确保长度 ≤ 36 不超过 Milvus VarChar max_length
+            String chunkId = UUID.randomUUID().toString();
             Map<String, Object> meta = Map.of(
                     "source", filename,
                     "docId", docId,
-                    "chunkIndex", i,
-                    "totalChunks", chunks.size()
+                    "chunkIndex", String.valueOf(i),
+                    "totalChunks", String.valueOf(chunks.size())
             );
             docs.add(new Document(chunkId, chunks.get(i), meta));
         }

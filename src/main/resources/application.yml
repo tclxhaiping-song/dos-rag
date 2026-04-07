@@ -21,7 +21,7 @@ spring:
     vectorstore:
       milvus:
         initialize-schema: true
-        collection-name: doc_qa_chunks
+        collection-name: doc_qa_chunks_qw
         embedding-dimension: 1024        # text-embedding-v3 输出 1024 维
         metric-type: COSINE
         index-type: IVF_FLAT
