@@ -23,9 +23,19 @@ import java.util.UUID;
  * 负责将上传的文件提取文本 → 切分片段 → 向量化存入 Milvus。
  * 支持 CHAR / SENTENCE / PARENT_CHILD 三种切分策略。
  * </p>
+ * <p>
+ * 注意：百炼平台 Embedding API 每批最多处理 {@value #EMBEDDING_BATCH_SIZE} 条文本，
+ * 因此入库时会自动分批调用 VectorStore.add()。
+ * </p>
  */
 @Service
 public class DocumentIngestionService {
+
+    /**
+     * 每批发送给 Embedding API 的最大文档数。
+     * 百炼平台 text-embedding-v3 限制单次请求最多 10 条，超过会返回 400 错误。
+     */
+    private static final int EMBEDDING_BATCH_SIZE = 10;
 
     private final TikaDocumentExtractor extractor;
     private final TextChunker textChunker;
@@ -106,7 +116,7 @@ public class DocumentIngestionService {
             );
             docs.add(new Document(chunkId, chunks.get(i), meta));
         }
-        vectorStore.add(docs);
+        addInBatches(docs);
         return chunks.size();
     }
 
@@ -159,7 +169,26 @@ public class DocumentIngestionService {
             }
         }
 
-        vectorStore.add(docs);
+        addInBatches(docs);
         return docs.size();
+    }
+
+    /**
+     * 分批将文档列表写入向量库。
+     * <p>
+     * 百炼平台 Embedding API（text-embedding-v3）限制单次请求最多 10 条文本，
+     * 超过会返回 HTTP 400 错误（batch size is invalid）。
+     * 此方法将文档列表按 {@value #EMBEDDING_BATCH_SIZE} 为一批，逐批调用
+     * {@link VectorStore#add(List)} 完成 Embedding + Milvus 入库。
+     * </p>
+     *
+     * @param docs 待入库的文档列表（可以超过 10 条）
+     */
+    private void addInBatches(List<Document> docs) {
+        for (int i = 0; i < docs.size(); i += EMBEDDING_BATCH_SIZE) {
+            int end = Math.min(i + EMBEDDING_BATCH_SIZE, docs.size());
+            List<Document> batch = docs.subList(i, end);
+            vectorStore.add(batch);
+        }
     }
 }

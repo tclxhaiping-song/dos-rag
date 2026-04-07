@@ -1,6 +1,5 @@
 package com.example.docqa.service;
 
-import com.example.docqa.config.ChunkProperties;
 import com.example.docqa.web.dto.QaQueryRequest;
 import com.example.docqa.web.dto.QaQueryResponse;
 import com.example.docqa.web.dto.RetrievedChunk;
@@ -26,10 +25,11 @@ import java.util.*;
  *   <li>可选地将片段作为上下文，调用 Chat 模型（qwen-plus）生成自然语言回答</li>
  * </ol>
  * <p>
- * 支持两种检索模式：
+ * 支持两种检索模式（自动根据检索到的数据判断，无需依赖配置）：
  * <ul>
  *   <li>传统模式（CHAR / SENTENCE）：检索到的片段直接作为上下文</li>
- *   <li>父子索引模式（PARENT_CHILD）：用小子块精准检索，用大父块喂给大模型提供完整上下文</li>
+ *   <li>父子索引模式（PARENT_CHILD）：用小子块精准检索，用大父块喂给大模型提供完整上下文；
+ *       响应中 text 展示父块文本，metadata.childText 保留实际命中的子块文本</li>
  * </ul>
  */
 @Service
@@ -41,17 +41,13 @@ public class QaService {
     private final MilvusVectorStore milvusVectorStore;
     /** Chat 大语言模型，用于根据检索片段生成回答（可选注入，未配置时为 null） */
     private final ChatModel chatModel;
-    /** 分块配置，用于判断当前策略是否为 PARENT_CHILD */
-    private final ChunkProperties chunkProperties;
 
     public QaService(
             VectorStore vectorStore,
-            ChunkProperties chunkProperties,
             @Autowired(required = false) ChatModel chatModel) {
         this.vectorStore = vectorStore;
         this.milvusVectorStore = vectorStore instanceof MilvusVectorStore m ? m : null;
         this.chatModel = chatModel;
-        this.chunkProperties = chunkProperties;
     }
 
     /**
@@ -61,8 +57,9 @@ public class QaService {
      * <ol>
      *   <li>从请求中获取 topK（默认 5）和 similarityThreshold</li>
      *   <li>调用 {@link #search} 从 Milvus 检索最相关的文档片段（子块）</li>
-     *   <li>将检索到的 Document 转换为 RetrievedChunk DTO</li>
-     *   <li>如果是 PARENT_CHILD 模式，从 metadata 中提取父块文本，去重后用于生成回答</li>
+     *   <li>自动检测检索到的数据是否包含 parentText（数据驱动，兼容混合数据）</li>
+     *   <li>如果是父子索引数据：响应的 text 展示父块文本，metadata.childText 保留命中的子块文本</li>
+     *   <li>如果是传统数据：响应的 text 直接展示匹配到的片段文本</li>
      *   <li>如果 generateAnswer=true 且 ChatModel 可用且有检索结果，调用 {@link #generateAnswer} 生成回答</li>
      * </ol>
      *
@@ -73,19 +70,37 @@ public class QaService {
         int topK = req.topK() != null ? req.topK() : 5;
         List<Document> docs = search(req.question(), topK, req.similarityThreshold());
 
+        // 判断检索到的数据是否来自父子索引模式（基于实际数据而非配置，兼容混合数据）
+        boolean hasParentChild = docs.stream()
+                .anyMatch(d -> d.getMetadata() != null
+                        && d.getMetadata().get("parentText") instanceof String pt
+                        && !pt.isBlank());
+
         List<RetrievedChunk> chunks = docs.stream()
                 .map(d -> {
-                    String t = d.getText();
-                    return new RetrievedChunk(
-                            d.getId(),
-                            t != null ? t : "",
-                            d.getMetadata() != null ? d.getMetadata() : Map.of());
+                    String childText = d.getText() != null ? d.getText() : "";
+                    Map<String, Object> meta = d.getMetadata() != null ? d.getMetadata() : Map.of();
+
+                    // 父子索引模式：优先展示父块文本作为 text，子块文本放入 metadata.childText
+                    String displayText;
+                    Map<String, Object> displayMeta;
+                    if (hasParentChild && meta.get("parentText") instanceof String pt && !pt.isBlank()) {
+                        displayText = pt;  // 响应的 text 字段展示父块文本（完整上下文）
+                        displayMeta = new HashMap<>(meta);
+                        displayMeta.put("childText", childText);  // 子块文本（实际匹配内容）保留在 metadata 中
+                        displayMeta.remove("parentText");          // 避免重复：父块已是 text，无需再留在 metadata
+                    } else {
+                        displayText = childText;
+                        displayMeta = meta;
+                    }
+
+                    return new RetrievedChunk(d.getId(), displayText, displayMeta);
                 })
                 .toList();
 
         String answer = null;
         if (Boolean.TRUE.equals(req.generateAnswer()) && chatModel != null && !chunks.isEmpty()) {
-            if (isParentChildMode()) {
+            if (hasParentChild) {
                 // 父子索引模式：提取去重的父块文本作为大模型上下文
                 List<String> parentTexts = extractUniqueParentTexts(docs);
                 answer = generateAnswerWithParentContext(req.question(), parentTexts);
@@ -96,15 +111,6 @@ public class QaService {
         }
 
         return new QaQueryResponse(answer, chunks);
-    }
-
-    /**
-     * 判断当前是否使用父子索引模式。
-     *
-     * @return true 表示当前策略为 PARENT_CHILD
-     */
-    private boolean isParentChildMode() {
-        return chunkProperties.getStrategy() == ChunkProperties.Strategy.PARENT_CHILD;
     }
 
     /**
