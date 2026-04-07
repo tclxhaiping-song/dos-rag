@@ -32,10 +32,20 @@ spring:
           username: root
           password: milvus
 
-# 分块：CHAR = 固定字符窗口+重叠；SENTENCE = 按句号类标点切句再合并到上限长度
+# 分块策略：
+#   CHAR          = 固定字符窗口 + 重叠
+#   SENTENCE      = 按句号类标点切句再合并到上限长度
+#   PARENT_CHILD  = 父子索引：大父块(1000字)提供上下文 + 小子块(100字)精准检索
 app:
   chunk:
-    strategy: CHAR
+    strategy: PARENT_CHILD
+    # --- CHAR 策略参数 ---
     char-chunk-size: 800
     char-overlap: 120
+    # --- SENTENCE 策略参数 ---
     sentence-max-chars: 900
+    # --- PARENT_CHILD 策略参数 ---
+    parent-chunk-size: 1000       # 父块大小（字符），提供给大模型的完整上下文
+    parent-overlap: 200           # 父块重叠区，防止语义在父块边界截断
+    child-chunk-size: 100         # 子块大小（字符），存入 Milvus 做精准检索
+    child-overlap: 20             # 子块重叠区

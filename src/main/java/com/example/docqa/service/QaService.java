@@ -1,5 +1,6 @@
 package com.example.docqa.service;
 
+import com.example.docqa.config.ChunkProperties;
 import com.example.docqa.web.dto.QaQueryRequest;
 import com.example.docqa.web.dto.QaQueryResponse;
 import com.example.docqa.web.dto.RetrievedChunk;
@@ -13,17 +14,23 @@ import org.springframework.ai.vectorstore.milvus.MilvusVectorStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.StringJoiner;
+import java.util.*;
 
 /**
  * 文档问答核心服务。
  * <p>
  * 实现 RAG（检索增强生成）流程：
- * 1. 将用户问题通过 Embedding 模型转为向量
- * 2. 在 Milvus 中进行相似度检索，找到最相关的文档片段
- * 3. 可选地将片段作为上下文，调用 Chat 模型生成自然语言回答
- * </p>
+ * <ol>
+ *   <li>将用户问题通过 Embedding 模型（text-embedding-v3）转为 1024 维向量</li>
+ *   <li>在 Milvus 中进行相似度检索，找到最相关的文档片段</li>
+ *   <li>可选地将片段作为上下文，调用 Chat 模型（qwen-plus）生成自然语言回答</li>
+ * </ol>
+ * <p>
+ * 支持两种检索模式：
+ * <ul>
+ *   <li>传统模式（CHAR / SENTENCE）：检索到的片段直接作为上下文</li>
+ *   <li>父子索引模式（PARENT_CHILD）：用小子块精准检索，用大父块喂给大模型提供完整上下文</li>
+ * </ul>
  */
 @Service
 public class QaService {
@@ -34,24 +41,30 @@ public class QaService {
     private final MilvusVectorStore milvusVectorStore;
     /** Chat 大语言模型，用于根据检索片段生成回答（可选注入，未配置时为 null） */
     private final ChatModel chatModel;
+    /** 分块配置，用于判断当前策略是否为 PARENT_CHILD */
+    private final ChunkProperties chunkProperties;
 
     public QaService(
             VectorStore vectorStore,
+            ChunkProperties chunkProperties,
             @Autowired(required = false) ChatModel chatModel) {
         this.vectorStore = vectorStore;
         this.milvusVectorStore = vectorStore instanceof MilvusVectorStore m ? m : null;
         this.chatModel = chatModel;
+        this.chunkProperties = chunkProperties;
     }
 
     /**
      * 执行文档问答查询。
      * <p>
      * 处理流程：
-     * 1. 从请求中获取 topK（默认 5）和 similarityThreshold
-     * 2. 调用 {@link #search} 从 Milvus 检索最相关的文档片段
-     * 3. 将检索到的 Document 转换为 RetrievedChunk DTO
-     * 4. 如果 generateAnswer=true 且 ChatModel 可用且有检索结果，调用 {@link #generateAnswer} 生成回答
-     * </p>
+     * <ol>
+     *   <li>从请求中获取 topK（默认 5）和 similarityThreshold</li>
+     *   <li>调用 {@link #search} 从 Milvus 检索最相关的文档片段（子块）</li>
+     *   <li>将检索到的 Document 转换为 RetrievedChunk DTO</li>
+     *   <li>如果是 PARENT_CHILD 模式，从 metadata 中提取父块文本，去重后用于生成回答</li>
+     *   <li>如果 generateAnswer=true 且 ChatModel 可用且有检索结果，调用 {@link #generateAnswer} 生成回答</li>
+     * </ol>
      *
      * @param req 查询请求，包含问题、topK、相似度阈值、是否生成回答等参数
      * @return 查询响应，包含检索到的片段列表和可选的 AI 生成回答
@@ -66,16 +79,65 @@ public class QaService {
                     return new RetrievedChunk(
                             d.getId(),
                             t != null ? t : "",
-                            d.getMetadata() != null ? d.getMetadata() : java.util.Map.of());
+                            d.getMetadata() != null ? d.getMetadata() : Map.of());
                 })
                 .toList();
 
         String answer = null;
         if (Boolean.TRUE.equals(req.generateAnswer()) && chatModel != null && !chunks.isEmpty()) {
-            answer = generateAnswer(req.question(), chunks);
+            if (isParentChildMode()) {
+                // 父子索引模式：提取去重的父块文本作为大模型上下文
+                List<String> parentTexts = extractUniqueParentTexts(docs);
+                answer = generateAnswerWithParentContext(req.question(), parentTexts);
+            } else {
+                // 传统模式：直接用检索到的片段作为上下文
+                answer = generateAnswer(req.question(), chunks);
+            }
         }
 
         return new QaQueryResponse(answer, chunks);
+    }
+
+    /**
+     * 判断当前是否使用父子索引模式。
+     *
+     * @return true 表示当前策略为 PARENT_CHILD
+     */
+    private boolean isParentChildMode() {
+        return chunkProperties.getStrategy() == ChunkProperties.Strategy.PARENT_CHILD;
+    }
+
+    /**
+     * 从检索到的子块文档中提取去重的父块文本。
+     * <p>
+     * 多个子块可能属于同一个父块（共享相同的 parentId），
+     * 此方法按 parentId 去重，保持检索顺序（相似度从高到低），
+     * 返回不重复的父块文本列表。
+     * </p>
+     *
+     * @param docs 检索到的子块文档列表
+     * @return 去重后的父块文本列表，按首次出现顺序排列
+     */
+    private List<String> extractUniqueParentTexts(List<Document> docs) {
+        // 使用 LinkedHashSet 按插入顺序去重
+        Set<String> seenParentIds = new LinkedHashSet<>();
+        List<String> parentTexts = new ArrayList<>();
+
+        for (Document doc : docs) {
+            Map<String, Object> meta = doc.getMetadata();
+            if (meta == null) continue;
+
+            Object parentId = meta.get("parentId");
+            Object parentText = meta.get("parentText");
+
+            if (parentText instanceof String pt && !pt.isBlank()) {
+                String pid = parentId != null ? parentId.toString() : pt; // 用 parentId 去重
+                if (seenParentIds.add(pid)) {
+                    parentTexts.add(pt);
+                }
+            }
+        }
+        return parentTexts;
     }
 
     /**
@@ -84,6 +146,9 @@ public class QaService {
      * 内部会将 question 文本通过 Embedding 模型（text-embedding-v3）转为 1024 维向量，
      * 然后在 Milvus 中执行 ANN（近似最近邻）搜索。
      * 如果底层是 MilvusVectorStore，会额外设置 nprobe=32 以提高召回率。
+     * </p>
+     * <p>
+     * 在 PARENT_CHILD 模式下，检索的是子块（~100字），精准匹配用户问题。
      * </p>
      *
      * @param question            用户问题文本
@@ -114,7 +179,36 @@ public class QaService {
     }
 
     /**
-     * 调用 Chat 大语言模型（qwen-plus）生成自然语言回答。
+     * 使用父块文本作为上下文，调用 Chat 大语言模型生成自然语言回答（PARENT_CHILD 模式专用）。
+     * <p>
+     * 与传统模式不同，此方法使用的是大的父块文本（~1000字）而非小的子块文本（~100字），
+     * 提供更丰富的上下文背景，帮助大模型生成更准确、更完整的回答。
+     * </p>
+     *
+     * @param question    用户的原始问题
+     * @param parentTexts 去重后的父块文本列表，作为 Chat 模型的参考上下文
+     * @return 模型生成的自然语言回答
+     */
+    private String generateAnswerWithParentContext(String question, List<String> parentTexts) {
+        StringJoiner ctx = new StringJoiner("\n---\n");
+        int i = 1;
+        for (String pt : parentTexts) {
+            ctx.add("[" + i++ + "] " + pt);
+        }
+        String system = "你是文档问答助手。请仅根据用户提供的参考片段回答问题；若片段不足以回答，请明确说明无法从文档中得出答案，不要编造。";
+        String user = "参考片段（父块上下文）：\n" + ctx + "\n\n问题：" + question;
+
+        return ChatClient.builder(chatModel)
+                .build()
+                .prompt()
+                .system(system)
+                .user(user)
+                .call()
+                .content();
+    }
+
+    /**
+     * 调用 Chat 大语言模型（qwen-plus）生成自然语言回答（传统模式）。
      * <p>
      * 将检索到的文档片段拼接为上下文，配合系统提示词一起发送给 Chat 模型。
      * 系统提示词要求模型仅基于提供的片段回答，不编造信息。
