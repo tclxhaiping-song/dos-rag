@@ -13,7 +13,7 @@ class TextChunkerTest {
     void chunkByChars_overlap() {
         List<String> parts = TextChunker.chunkByChars("abcdefghijklmnop", 6, 2);
         assertThat(parts).hasSizeGreaterThanOrEqualTo(2);
-        assertThat(parts.getFirst()).hasSize(6);
+        assertThat(parts.get(0)).hasSize(6);
     }
 
     @Test
