@@ -12,17 +12,17 @@ spring:
     openai:
       api-key: sk-5f462474768a41f58f02ce4b1910f34c     # 百炼平台 API Key，建议用环境变量
       base-url: https://dashscope.aliyuncs.com/compatible-mode
-      embedding:
-        options:
-          model: qwen3-vl-embedding       # 百炼 Embedding 模型，1024 维
-      chat:
-        options:
-          model: qwen-plus               # 百炼 Chat 模型（可换 qwen-turbo / qwen-max）
+#      embedding:
+#        options:
+#          model: text-embedding-v3        # OpenAI 兼容模式 Embedding（当 DashScope 原生关闭时生效）
+#      chat:
+#        options:
+#          model: qwen-plus               # 百炼 Chat 模型（可换 qwen-turbo / qwen-max）
     vectorstore:
       milvus:
         initialize-schema: true
-        collection-name: doc_qa_chunks_qw
-        embedding-dimension: 1024        # text-embedding-v3 输出 1024 维
+        collection-name: doc_qa_chunks_qw_v1
+        embedding-dimension: 1024        # 向量维度（须与 Embedding 模型输出一致）
         metric-type: COSINE
         index-type: IVF_FLAT
         index-parameters: '{"nlist":1024}'
@@ -32,11 +32,29 @@ spring:
           username: root
           password: milvus
 
-# 分块策略：
-#   CHAR          = 固定字符窗口 + 重叠
-#   SENTENCE      = 按句号类标点切句再合并到上限长度
-#   PARENT_CHILD  = 父子索引：大父块(1000字)提供上下文 + 小子块(100字)精准检索
+# ====== 应用配置 ======
 app:
+  # ------ DashScope 原生 Embedding 配置 ------
+  # 部分模型（如 qwen3-vl-embedding）不支持 OpenAI 兼容模式，需通过 DashScope 原生 API 调用。
+  # enabled=true 时使用此配置；enabled=false 时回退到上面的 OpenAI 兼容模式 Embedding。
+  dashscope:
+    embedding:
+      enabled: true                       # true=使用 DashScope 原生 API，false=使用 OpenAI 兼容模式
+      api-key: ${spring.ai.openai.api-key}  # 复用百炼 API Key
+      model: qwen3-vl-embedding           # DashScope 原生 Embedding 模型
+      dimension: 1024                     # 输出向量维度
+      batch-size: 10                      # 每批最大文本数（百炼限制）
+      input-format: CONTENTS              # TEXTS=纯文本格式, CONTENTS=多模态格式（qwen3-vl-embedding 需用 CONTENTS）
+      # API 端点（根据模型类型选择）：
+      #   纯文本模型（text-embedding-v3）→ text-embedding 端点 + TEXTS 格式
+      #   多模态模型（qwen3-vl-embedding）→ multimodal-embedding 端点 + CONTENTS 格式
+      # api-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+      api-url: https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
+
+  # ------ 分块策略 ------
+  #   CHAR          = 固定字符窗口 + 重叠
+  #   SENTENCE      = 按句号类标点切句再合并到上限长度
+  #   PARENT_CHILD  = 父子索引：大父块(1000字)提供上下文 + 小子块(100字)精准检索
   chunk:
     strategy: PARENT_CHILD
     # --- CHAR 策略参数 ---
