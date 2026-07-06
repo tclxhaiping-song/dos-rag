@@ -42,7 +42,8 @@ public class QaController {
      *   "question": "什么是 Spring AI？",
      *   "topK": 5,
      *   "similarityThreshold": 0.7,
-     *   "generateAnswer": true
+     *   "generateAnswer": true,
+     *   "rerank": true
      * }
      * }</pre>
      *
@@ -52,6 +53,7 @@ public class QaController {
      *                  <li><b>topK</b>（可选，默认 5）- 从向量库中检索最相似的前 K 个文档片段</li>
      *                  <li><b>similarityThreshold</b>（可选）- 相似度阈值（0~1），低于此阈值的片段会被过滤掉</li>
      *                  <li><b>generateAnswer</b>（可选，默认 false）- 是否调用大语言模型（qwen-plus）基于检索片段生成回答</li>
+     *                  <li><b>rerank</b>（可选）- 是否使用大模型对向量检索结果重排序；未设置时使用 app.rerank.enabled 配置</li>
      *                </ul>
      * @return 查询响应，包含以下字段：
      *         <ul>

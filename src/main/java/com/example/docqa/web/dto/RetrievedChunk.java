@@ -30,6 +30,11 @@ import java.util.Map;
  *                   <li><b>childIndex</b> - 子块在父块中的序号</li>
  *                   <li><b>globalChildIndex</b> - 子块在文档中的全局序号</li>
  *                 </ul>
+ *                 <p><b>启用 LLM rerank 时的额外字段：</b></p>
+ *                 <ul>
+ *                   <li><b>rerankScore</b> - 大模型给出的相关度分数（0~10）</li>
+ *                   <li><b>rerankRank</b> - rerank 后的排名（从 1 开始）</li>
+ *                 </ul>
  */
 public record RetrievedChunk(
         String id,

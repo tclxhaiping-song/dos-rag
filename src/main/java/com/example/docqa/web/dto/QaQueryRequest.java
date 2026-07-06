@@ -11,11 +11,14 @@ import jakarta.validation.constraints.Size;
  * @param similarityThreshold （可选）相似度阈值（0~1），低于该值的片段将被过滤，不设置则返回所有匹配结果
  * @param generateAnswer      （可选）是否调用大语言模型生成回答，默认 false；
  *                            设为 true 时，会将检索到的片段作为上下文发送给 Chat 模型生成答案
+ * @param rerank              （可选）是否使用大模型对向量检索结果重排序；
+ *                            未设置时使用 app.rerank.enabled 全局配置
  */
 public record QaQueryRequest(
         @NotBlank @Size(max = 4000) String question,
         Integer topK,
         Double similarityThreshold,
-        Boolean generateAnswer
+        Boolean generateAnswer,
+        Boolean rerank
 ) {
 }

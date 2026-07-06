@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Primary;
  * </p>
  */
 @Configuration
-@EnableConfigurationProperties(ChunkProperties.class)
+@EnableConfigurationProperties({ChunkProperties.class, RerankProperties.class})
 public class AppConfig {
 
     /**

@@ -15,9 +15,9 @@ spring:
 #      embedding:
 #        options:
 #          model: text-embedding-v3        # OpenAI 兼容模式 Embedding（当 DashScope 原生关闭时生效）
-#      chat:
-#        options:
-#          model: qwen-plus               # 百炼 Chat 模型（可换 qwen-turbo / qwen-max）
+      chat:
+        options:
+          model: qwen-plus               # 百炼 Chat 模型（回答生成 & LLM rerank）
     vectorstore:
       milvus:
         initialize-schema: true
@@ -67,3 +67,10 @@ app:
     parent-overlap: 200           # 父块重叠区，防止语义在父块边界截断
     child-chunk-size: 100         # 子块大小（字符），存入 Milvus 做精准检索
     child-overlap: 20             # 子块重叠区
+
+  # ------ LLM Rerank 配置 ------
+  # 向量检索先召回 topK × candidateMultiplier 条候选，再由 Chat 模型重排序取 topK
+  rerank:
+    enabled: false                # 全局默认是否启用 rerank（单次请求可通过 rerank 字段覆盖）
+    candidate-multiplier: 3       # 候选倍数，如 topK=5 时先召回 15 条
+    max-candidates: 20            # 单次候选上限

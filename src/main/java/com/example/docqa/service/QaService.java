@@ -1,5 +1,6 @@
 package com.example.docqa.service;
 
+import com.example.docqa.config.RerankProperties;
 import com.example.docqa.web.dto.QaQueryRequest;
 import com.example.docqa.web.dto.QaQueryResponse;
 import com.example.docqa.web.dto.RetrievedChunk;
@@ -41,13 +42,21 @@ public class QaService {
     private final MilvusVectorStore milvusVectorStore;
     /** Chat 大语言模型，用于根据检索片段生成回答（可选注入，未配置时为 null） */
     private final ChatModel chatModel;
+    /** 大模型 rerank 服务 */
+    private final LlmRerankService llmRerankService;
+    /** rerank 全局配置 */
+    private final RerankProperties rerankProperties;
 
     public QaService(
             VectorStore vectorStore,
-            @Autowired(required = false) ChatModel chatModel) {
+            @Autowired(required = false) ChatModel chatModel,
+            LlmRerankService llmRerankService,
+            RerankProperties rerankProperties) {
         this.vectorStore = vectorStore;
         this.milvusVectorStore = vectorStore instanceof MilvusVectorStore m ? m : null;
         this.chatModel = chatModel;
+        this.llmRerankService = llmRerankService;
+        this.rerankProperties = rerankProperties;
     }
 
     /**
@@ -56,7 +65,8 @@ public class QaService {
      * 处理流程：
      * <ol>
      *   <li>从请求中获取 topK（默认 5）和 similarityThreshold</li>
-     *   <li>调用 {@link #search} 从 Milvus 检索最相关的文档片段（子块）</li>
+     *   <li>调用 {@link #search} 从 Milvus 检索文档片段（启用 rerank 时先召回更多候选）</li>
+     *   <li>若启用 LLM rerank，调用 {@link LlmRerankService} 对候选片段重排序后取 topK</li>
      *   <li>自动检测检索到的数据是否包含 parentText（数据驱动，兼容混合数据）</li>
      *   <li>如果是父子索引数据：响应的 text 展示父块文本，metadata.childText 保留命中的子块文本</li>
      *   <li>如果是传统数据：响应的 text 直接展示匹配到的片段文本</li>
@@ -68,7 +78,16 @@ public class QaService {
      */
     public QaQueryResponse query(QaQueryRequest req) {
         int topK = req.topK() != null ? req.topK() : 5;
-        List<Document> docs = search(req.question(), topK, req.similarityThreshold());
+        boolean rerankEnabled = isRerankEnabled(req);
+
+        int searchTopK = rerankEnabled
+                ? rerankProperties.computeCandidateCount(topK)
+                : topK;
+        List<Document> docs = search(req.question(), searchTopK, req.similarityThreshold());
+
+        if (rerankEnabled) {
+            docs = llmRerankService.rerank(req.question(), docs, topK);
+        }
 
         // 判断检索到的数据是否来自父子索引模式（基于实际数据而非配置，兼容混合数据）
         boolean hasParentChild = docs.stream()
@@ -111,6 +130,13 @@ public class QaService {
         }
 
         return new QaQueryResponse(answer, chunks);
+    }
+
+    private boolean isRerankEnabled(QaQueryRequest req) {
+        if (req.rerank() != null) {
+            return req.rerank();
+        }
+        return rerankProperties.isEnabled();
     }
 
     /**
