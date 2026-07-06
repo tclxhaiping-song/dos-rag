@@ -1,0 +1,23 @@
+src/main/java/com/example/docqa/config/RerankProperties.java
+  s_6ff48eb2b1bcd8::t_5c5d58a5c01cae 1-59
+src/main/java/com/example/docqa/service/LlmRerankService.java
+  s_6ff48eb2b1bcd8::t_7497cc6f5b636c 1-192
+src/main/resources/application.yml
+  s_6ff48eb2b1bcd8::t_958e465d1d80e0 18-20,70-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cf97cc8b702d68bc46fd234dbdfe64b1ea0c2b08",
+  "prompts": {},
+  "sessions": {
+    "s_6ff48eb2b1bcd8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cc55caff-3ecf-40e6-a39c-689637b65273",
+        "model": "default"
+      },
+      "human_author": "haiping.song <haiping.song@ly.com>"
+    }
+  }
+}
