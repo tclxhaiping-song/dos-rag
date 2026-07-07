@@ -52,7 +52,7 @@ public class LlmRerankService {
 
         int limit = Math.min(candidates.size(), topK);
         if (candidates.size() == 1) {
-            return List.of(enrichWithRerankScore(candidates.getFirst(), 10.0, 1));
+            return List.of(enrichWithRerankScore(candidates.get(0), 10.0, 1));
         }
 
         try {
